@@ -56,37 +56,12 @@ const app = express();
 // Trust Vercel/Proxy to ensure req.ip is derived correctly for rate limiting
 app.set("trust proxy", true);
 
-// Rate limiting for Nominatim API calls
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute per IP
+// ============================================
+// CORS CONFIGURATION - MUST BE FIRST
+// ============================================
+// This is critical for Vercel serverless functions
+// CORS setup must happen before any other middleware
 
-const checkRateLimit = (ip) => {
-  if (process.env.DISABLE_RATE_LIMITING === "true" || isDevelopment) {
-    return true;
-  }
-  const now = Date.now();
-  const userRequests = rateLimitMap.get(ip) || [];
-
-  // Remove old requests outside the window
-  const recentRequests = userRequests.filter(
-    (time) => now - time < RATE_LIMIT_WINDOW
-  );
-
-  if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
-    return false; // Rate limit exceeded
-  }
-
-  // Add current request
-  recentRequests.push(now);
-  rateLimitMap.set(ip, recentRequests);
-
-  return true; // Request allowed
-};
-
-// upload is already imported from fileValidator middleware
-
-// Apply CORS
 // Allow ngrok URLs for local development
 const defaultOrigins = [
   // Development URLs
@@ -122,32 +97,6 @@ console.log(
   allowedOrigins.includes(normalizeOrigin("https://hub.gametribe.com"))
 );
 
-// SECURITY FIX: Mobile app authentication middleware
-const validateMobileApp = (req, res, next) => {
-  const origin = req.get("origin");
-
-  // If no origin (mobile apps, curl, Postman), validate mobile app ID
-  if (!origin) {
-    const mobileAppId = req.get("x-mobile-app-id");
-    const expectedMobileSecret =
-      process.env.MOBILE_APP_SECRET || "gametribe-mobile-2025";
-
-    // Always allow in development/testing mode
-    if (process.env.NODE_ENV !== "production") {
-      return next();
-    }
-
-    if (mobileAppId !== expectedMobileSecret) {
-      return res.status(403).json({
-        error: "Mobile app authentication required",
-        message: "Please use the official GameTribe mobile app",
-      });
-    }
-  }
-
-  next();
-};
-
 // CORS origin validation function
 const validateOrigin = (origin) => {
   if (!origin) {
@@ -177,12 +126,18 @@ const validateOrigin = (origin) => {
   return false;
 };
 
-// Explicit OPTIONS handler for Vercel serverless (must be before CORS middleware)
+// Explicit OPTIONS handler for Vercel serverless (FIRST middleware)
 // This is critical for Vercel as it handles OPTIONS requests differently
-// Handle OPTIONS requests in middleware instead of route pattern to avoid path-to-regexp issues
 app.use((req, res, next) => {
+  // Log all OPTIONS requests for debugging
   if (req.method === "OPTIONS") {
     const origin = req.get("origin");
+    console.log("🔍 [CORS] OPTIONS preflight request:", {
+      origin,
+      path: req.path,
+      normalized: origin ? normalizeOrigin(origin) : null,
+      allowed: validateOrigin(origin),
+    });
 
     if (validateOrigin(origin)) {
       // When credentials: true, we must use the specific origin, not "*"
@@ -199,9 +154,11 @@ app.use((req, res, next) => {
       );
       res.header("Access-Control-Allow-Credentials", "true");
       res.header("Access-Control-Max-Age", "86400");
+      console.log("✅ [CORS] OPTIONS preflight allowed for:", origin);
       return res.status(204).end();
     }
 
+    console.log("❌ [CORS] OPTIONS preflight blocked for:", origin);
     return res.status(403).json({ error: "Not allowed by CORS" });
   }
   next();
@@ -260,6 +217,66 @@ app.use(
     maxAge: 86400,
   })
 );
+
+// ============================================
+// END CORS CONFIGURATION
+// ============================================
+
+// Rate limiting for Nominatim API calls
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute per IP
+
+const checkRateLimit = (ip) => {
+  if (process.env.DISABLE_RATE_LIMITING === "true" || isDevelopment) {
+    return true;
+  }
+  const now = Date.now();
+  const userRequests = rateLimitMap.get(ip) || [];
+
+  // Remove old requests outside the window
+  const recentRequests = userRequests.filter(
+    (time) => now - time < RATE_LIMIT_WINDOW
+  );
+
+  if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
+    return false; // Rate limit exceeded
+  }
+
+  // Add current request
+  recentRequests.push(now);
+  rateLimitMap.set(ip, recentRequests);
+
+  return true; // Request allowed
+};
+
+// upload is already imported from fileValidator middleware
+
+// SECURITY FIX: Mobile app authentication middleware
+const validateMobileApp = (req, res, next) => {
+  const origin = req.get("origin");
+
+  // If no origin (mobile apps, curl, Postman), validate mobile app ID
+  if (!origin) {
+    const mobileAppId = req.get("x-mobile-app-id");
+    const expectedMobileSecret =
+      process.env.MOBILE_APP_SECRET || "gametribe-mobile-2025";
+
+    // Always allow in development/testing mode
+    if (process.env.NODE_ENV !== "production") {
+      return next();
+    }
+
+    if (mobileAppId !== expectedMobileSecret) {
+      return res.status(403).json({
+        error: "Mobile app authentication required",
+        message: "Please use the official GameTribe mobile app",
+      });
+    }
+  }
+
+  next();
+};
 
 // Apply mobile app validation (disabled for easier testing)
 // Enable this in production by setting NODE_ENV=production and uncommenting below
