@@ -61,6 +61,7 @@ app.set("trust proxy", true);
 // ============================================
 // This is critical for Vercel serverless functions
 // CORS setup must happen before any other middleware
+// IMPORTANT: For Vercel, we must handle CORS at the very top level
 
 // Allow ngrok URLs for local development
 const defaultOrigins = [
@@ -135,25 +136,27 @@ app.use((req, res, next) => {
     console.log("🔍 [CORS] OPTIONS preflight request:", {
       origin,
       path: req.path,
+      url: req.url,
       normalized: origin ? normalizeOrigin(origin) : null,
       allowed: validateOrigin(origin),
     });
 
     if (validateOrigin(origin)) {
       // When credentials: true, we must use the specific origin, not "*"
+      // Use setHeader for better Vercel compatibility
       if (origin) {
-        res.header("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Origin", origin);
       }
-      res.header(
+      res.setHeader(
         "Access-Control-Allow-Methods",
         "GET, POST, PUT, PATCH, DELETE, OPTIONS"
       );
-      res.header(
+      res.setHeader(
         "Access-Control-Allow-Headers",
         "Content-Type, Authorization, X-SSO-Token, X-Community-Token, X-Mobile-App-Id, ngrok-skip-browser-warning"
       );
-      res.header("Access-Control-Allow-Credentials", "true");
-      res.header("Access-Control-Max-Age", "86400");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Max-Age", "86400");
       console.log("✅ [CORS] OPTIONS preflight allowed for:", origin);
       return res.status(204).end();
     }
@@ -172,18 +175,18 @@ app.use((req, res, next) => {
   if (validateOrigin(origin)) {
     // When credentials: true, we must use the specific origin, not "*"
     if (origin) {
-      res.header("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Origin", origin);
     }
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
       "Access-Control-Allow-Methods",
       "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     );
-    res.header(
+    res.setHeader(
       "Access-Control-Allow-Headers",
       "Content-Type, Authorization, X-SSO-Token, X-Community-Token, X-Mobile-App-Id, ngrok-skip-browser-warning"
     );
-    res.header(
+    res.setHeader(
       "Access-Control-Expose-Headers",
       "X-SSO-Token, X-Community-Token"
     );
