@@ -148,34 +148,100 @@ const validateMobileApp = (req, res, next) => {
   next();
 };
 
+// CORS origin validation function
+const validateOrigin = (origin) => {
+  if (!origin) {
+    return true; // Allow requests with no origin (mobile apps)
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+
+  // Check normalized match
+  if (allowedOrigins.includes(normalizedOrigin)) {
+    console.log("✅ CORS: Origin allowed:", origin);
+    return true;
+  }
+
+  // In development, allow any ngrok URL
+  if (
+    (process.env.NODE_ENV === "development" || !process.env.NODE_ENV) &&
+    (origin.includes("ngrok-free.app") || origin.includes("ngrok.io"))
+  ) {
+    console.log("✅ CORS: Ngrok origin allowed in development:", origin);
+    return true;
+  }
+
+  console.log("❌ CORS: Origin blocked:", origin);
+  console.log("❌ CORS: Normalized origin:", normalizedOrigin);
+  console.log("❌ CORS: Allowed origins:", allowedOrigins);
+  return false;
+};
+
+// Explicit OPTIONS handler for Vercel serverless (must be before CORS middleware)
+// This is critical for Vercel as it handles OPTIONS requests differently
+// Handle OPTIONS requests in middleware instead of route pattern to avoid path-to-regexp issues
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    const origin = req.get("origin");
+
+    if (validateOrigin(origin)) {
+      // When credentials: true, we must use the specific origin, not "*"
+      if (origin) {
+        res.header("Access-Control-Allow-Origin", origin);
+      }
+      res.header(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+      );
+      res.header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, X-SSO-Token, X-Community-Token, X-Mobile-App-Id, ngrok-skip-browser-warning"
+      );
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Max-Age", "86400");
+      return res.status(204).end();
+    }
+
+    return res.status(403).json({ error: "Not allowed by CORS" });
+  }
+  next();
+});
+
+// CORS middleware with explicit header setting for Vercel compatibility
+// This ensures headers are set on all responses, not just preflight
+app.use((req, res, next) => {
+  const origin = req.get("origin");
+
+  if (validateOrigin(origin)) {
+    // When credentials: true, we must use the specific origin, not "*"
+    if (origin) {
+      res.header("Access-Control-Allow-Origin", origin);
+    }
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    );
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-SSO-Token, X-Community-Token, X-Mobile-App-Id, ngrok-skip-browser-warning"
+    );
+    res.header(
+      "Access-Control-Expose-Headers",
+      "X-SSO-Token, X-Community-Token"
+    );
+  }
+
+  next();
+});
+
+// Also use cors middleware for additional compatibility
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps) - validated by middleware
-      if (!origin) {
+      if (validateOrigin(origin)) {
         return callback(null, true);
       }
-
-      const normalizedOrigin = normalizeOrigin(origin);
-
-      // Check normalized match
-      if (allowedOrigins.includes(normalizedOrigin)) {
-        console.log("✅ CORS: Origin allowed:", origin);
-        return callback(null, true);
-      }
-
-      // In development, allow any ngrok URL
-      if (
-        (process.env.NODE_ENV === "development" || !process.env.NODE_ENV) &&
-        (origin.includes("ngrok-free.app") || origin.includes("ngrok.io"))
-      ) {
-        console.log("✅ CORS: Ngrok origin allowed in development:", origin);
-        return callback(null, true);
-      }
-
-      console.log("❌ CORS: Origin blocked:", origin);
-      console.log("❌ CORS: Normalized origin:", normalizedOrigin);
-      console.log("❌ CORS: Allowed origins:", allowedOrigins);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
@@ -186,12 +252,12 @@ app.use(
       "X-SSO-Token",
       "X-Community-Token",
       "X-Mobile-App-Id",
-      "ngrok-skip-browser-warning", // Allow ngrok bypass header
+      "ngrok-skip-browser-warning",
     ],
     exposedHeaders: ["X-SSO-Token", "X-Community-Token"],
     preflightContinue: false,
-    optionsSuccessStatus: 204, // Use 204 for OPTIONS (standard)
-    maxAge: 86400, // Cache preflight for 24 hours
+    optionsSuccessStatus: 204,
+    maxAge: 86400,
   })
 );
 
