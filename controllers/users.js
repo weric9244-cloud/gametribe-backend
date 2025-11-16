@@ -1,5 +1,10 @@
 const { database } = require("../config/firebase");
 const { cache, cacheKeys, CACHE_TTL } = require("../utils/cache");
+const {
+  normalizeUserFromAuth,
+  normalizeUserData,
+  getNormalizationUpdatePayload,
+} = require("../utils/userNormalization");
 
 // Simple in-memory rate limiter for presence sync
 const presenceSyncLimiter = new Map();
@@ -21,15 +26,19 @@ const getUserProfile = async (req, res) => {
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
     if (!userSnapshot.exists()) {
+      // Normalize user data from Firebase Auth (Google login)
+      const normalizedData = normalizeUserFromAuth(req.user);
+      
       const newUser = {
         uid: userId,
-        email: req.user.email || "",
-        username:
-          req.user.name ||
-          (req.user.email && typeof req.user.email === "string"
-            ? req.user.email.split("@")[0]
-            : "User"),
-        avatar: req.user.picture || "",
+        email: normalizedData.email,
+        displayName: normalizedData.displayName, // Primary searchable field (from Google/Firebase Auth)
+        name: normalizedData.name, // Alias for compatibility
+        username: normalizedData.username, // Searchable username field
+        firstName: normalizedData.firstName, // First name for better search
+        lastName: normalizedData.lastName, // Last name for better search
+        photoURL: normalizedData.photoURL, // Primary photo field (from Google)
+        avatar: normalizedData.avatar, // Alias for compatibility
         bio: "",
         createdAt: new Date().toISOString(),
         friendsCount: 0,
@@ -41,8 +50,19 @@ const getUserProfile = async (req, res) => {
           currency: "KES",
           lastUpdated: new Date().toISOString(),
         },
+        // Mark as normalized for search
+        _normalizedForSearch: true,
+        _normalizedAt: new Date().toISOString(),
       };
       await userRef.set(newUser);
+      
+      console.log("✅ New user created with normalized data:", {
+        userId,
+        displayName: newUser.displayName,
+        firstName: newUser.firstName,
+        lastName: newUser.lastName,
+        email: newUser.email,
+      });
 
       // Cache the new user
       await cache.set(cacheKey, newUser, CACHE_TTL.USER_PROFILE);
@@ -50,7 +70,45 @@ const getUserProfile = async (req, res) => {
       return res.status(200).json(newUser);
     }
 
-    const userData = userSnapshot.val();
+    let userData = userSnapshot.val();
+
+    // Normalize user data for search if not already normalized
+    // Also update with latest Firebase Auth data (Google profile may have updated)
+    const shouldUpdate = !userData._normalizedForSearch || 
+                         (req.user.picture && req.user.picture !== userData.photoURL) ||
+                         ((req.user.name || req.user.displayName) && 
+                          (req.user.name || req.user.displayName) !== userData.displayName);
+    
+    if (shouldUpdate) {
+      // Merge Firebase Auth data with existing user data
+      const normalizedData = normalizeUserFromAuth(req.user, userData);
+      
+      // Update local userData object
+      userData.displayName = normalizedData.displayName;
+      userData.name = normalizedData.name;
+      userData.username = normalizedData.username;
+      userData.firstName = normalizedData.firstName;
+      userData.lastName = normalizedData.lastName;
+      userData.photoURL = normalizedData.photoURL;
+      userData.avatar = normalizedData.avatar;
+      userData.email = normalizedData.email || userData.email;
+      userData._normalizedForSearch = true;
+      userData._normalizedAt = new Date().toISOString();
+      
+      // Update in database (non-blocking)
+      const updatePayload = getNormalizationUpdatePayload(normalizedData);
+      userRef.update(updatePayload).catch(err => {
+        console.warn(`Failed to normalize user ${userId}:`, err.message);
+      });
+      
+      console.log("✅ User data normalized/updated:", {
+        userId,
+        displayName: userData.displayName,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        wasNormalized: !userData._normalizedForSearch,
+      });
+    }
 
     // Ensure wallet object exists with proper structure
     if (!userData.wallet) {
@@ -71,6 +129,8 @@ const getUserProfile = async (req, res) => {
       points: userData.points,
       wallet: userData.wallet,
       hasWallet: !!userData.wallet,
+      displayName: userData.displayName,
+      normalized: userData._normalizedForSearch,
     });
 
     // Cache the user data
@@ -86,22 +146,81 @@ const getUserProfile = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { username, avatar, bio } = req.body;
-    if (!username && !avatar && !bio) {
+    const { username, avatar, bio, displayName } = req.body;
+    if (!username && !avatar && !bio && !displayName) {
       return res.status(400).json({
-        error: "At least one field (username, avatar, or bio) is required",
+        error: "At least one field (username, avatar, bio, or displayName) is required",
       });
     }
+    
     const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    
+    if (!userSnapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    const existingUserData = userSnapshot.val();
     const updateData = {};
-    if (username) updateData.username = username;
-    if (avatar) updateData.avatar = avatar;
-    if (bio !== undefined) updateData.bio = bio;
+    
+    // Handle username update - normalize it
+    if (username) {
+      updateData.username = username;
+      // If displayName is being set from username, extract first/last name
+      if (!displayName && !existingUserData.displayName) {
+        updateData.displayName = username;
+        updateData.name = username;
+      }
+    }
+    
+    // Handle displayName update - extract first/last name
+    if (displayName) {
+      updateData.displayName = displayName;
+      updateData.name = displayName;
+      
+      // Extract first and last name from displayName
+      const nameParts = displayName.trim().split(/\s+/);
+      if (nameParts.length >= 2) {
+        updateData.firstName = nameParts[0];
+        updateData.lastName = nameParts.slice(1).join(' ');
+      } else if (nameParts.length === 1) {
+        updateData.firstName = nameParts[0];
+        updateData.lastName = null;
+      }
+      
+      // Update username if not explicitly provided
+      if (!username && !existingUserData.username) {
+        updateData.username = displayName.toLowerCase()
+          .replace(/\s+/g, '_')
+          .replace(/[^\w_]/g, '');
+      }
+    }
+    
+    // Handle avatar/photoURL update - keep both fields in sync
+    if (avatar) {
+      updateData.avatar = avatar;
+      updateData.photoURL = avatar;
+    }
+    
+    // Handle bio update
+    if (bio !== undefined) {
+      updateData.bio = bio;
+    }
+    
+    // Ensure user remains normalized
+    updateData._normalizedForSearch = true;
+    updateData._normalizedAt = new Date().toISOString();
+    
     await userRef.update(updateData);
 
     // Invalidate cache
     const cacheKey = cacheKeys.userProfile(userId);
     await cache.del(cacheKey);
+
+    console.log("✅ User profile updated with normalized data:", {
+      userId,
+      updatedFields: Object.keys(updateData),
+    });
 
     return res.status(200).json({ message: "Profile updated successfully" });
   } catch (error) {

@@ -5,6 +5,7 @@ const {
   migrateChallengeIndexes,
   checkMigrationStatus,
 } = require("../utils/migrateChallengeIndex");
+const { normalizeAllUsers } = require("../scripts/normalizeUsersForSearch");
 
 /**
  * Migration Routes
@@ -43,6 +44,26 @@ router.post("/challenge-index", authenticateToken, async (req, res) => {
     console.error("Error running migration:", error);
     res.status(500).json({
       error: "Migration failed",
+      message: error.message,
+    });
+  }
+});
+
+// Normalize all users for search
+router.post("/normalize-users", authenticateToken, async (req, res) => {
+  try {
+    console.log("🚀 Starting user normalization for search...");
+    const result = await normalizeAllUsers();
+
+    res.json({
+      success: true,
+      message: "User normalization completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("Error normalizing users:", error);
+    res.status(500).json({
+      error: "Normalization failed",
       message: error.message,
     });
   }
