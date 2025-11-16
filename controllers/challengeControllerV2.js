@@ -311,6 +311,26 @@ const createChallenge = async (req, res) => {
       log.warn("create:index_update:error", { error: err.message, challengeId });
     });
 
+    // Create notification for challenged user (non-blocking)
+    try {
+      const { createChallengeNotification } = require("./notificationController");
+      const challengerName = user.displayName || user.username || "Someone";
+      const challengerAvatar = user.photoURL || user.avatar || "";
+      
+      createChallengeNotification(challengerId, challengedId, {
+        challengeId,
+        challengerName,
+        challengerAvatar,
+        gameTitle: challengeData.gameTitle,
+        gameImage: challengeData.gameImage,
+        betAmount: bet,
+      }).catch((err) => {
+        log.warn("create:notification:error", { error: err.message, challengeId });
+      });
+    } catch (notifyErr) {
+      log.warn("create:notification:setup_error", { error: notifyErr.message });
+    }
+
     log.info("create:success", {
       rid,
       challengeId,

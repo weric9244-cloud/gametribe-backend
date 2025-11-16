@@ -187,11 +187,27 @@ router.get("/users", authenticate, generalLimiter, async (req, res) => {
       }
     };
 
-    const results = await searchService.search(query, searchOptions);
+    const searchResults = await searchService.search(query, searchOptions);
+    
+    // Return the users array directly for easier consumption
+    const users = searchResults.results || searchResults || [];
+    
+    // Log for debugging
+    console.log(`🔍 [Search API] Query: "${query}", Found ${users.length} users`);
+    if (users.length > 0) {
+      console.log(`🔍 [Search API] Sample results:`, users.slice(0, 3).map(u => ({
+        uid: u.uid,
+        displayName: u.displayName || u.name,
+        username: u.username,
+        email: u.email
+      })));
+    } else {
+      console.log(`🔍 [Search API] No users found for query: "${query}"`);
+    }
     
     res.status(200).json({
       success: true,
-      data: results
+      data: users  // Return array directly, not the whole searchResults object
     });
   } catch (error) {
     console.error("Search users error:", error);

@@ -150,33 +150,41 @@ const getEvents = async (req, res, next) => {
       `📄 Fetching events - Page: ${pageNum}, Limit: ${limitNum}, Search: "${search}", Sort: ${sortBy} ${sortOrder}`
     );
 
-    const snapshot = await database.ref("events").once("value");
+    // Use Firebase query for upcoming events to reduce data transfer
+    const now = new Date().toISOString();
+    const eventsRef = database.ref("events");
+    
+    // Query upcoming events by startDate
+    // Note: This requires an index on startDate in Firebase
+    let snapshot;
+    try {
+      snapshot = await eventsRef
+        .orderByChild("startDate")
+        .startAt(now)
+        .once("value");
+    } catch (error) {
+      // If index doesn't exist, fallback to fetching all events
+      console.warn("Firebase index on startDate not found, falling back to full fetch:", error.message);
+      snapshot = await eventsRef.once("value");
+    }
+    
     const events = snapshot.val() || {};
 
-    let eventsArray = Object.entries(events).map(([id, event]) => ({
-      id,
-      ...event,
-      bookingCount: event.bookings ? Object.keys(event.bookings).length : 0,
-    }));
-
-    // Filter for upcoming events only (no buffer for testing)
-    const now = new Date();
-
-    console.log(`🕐 Date filtering - Now: ${now.toISOString()}`);
-    console.log(`📊 Total events before filtering: ${eventsArray.length}`);
-
-    eventsArray = eventsArray.filter((event) => {
+    let eventsArray = Object.entries(events).map(([id, event]) => {
       const eventStartDate = new Date(event.startDate);
-      const isUpcoming = eventStartDate >= now;
-      console.log(
-        `📅 Event "${event.title}" - Start: ${
-          event.startDate
-        }, Parsed: ${eventStartDate.toISOString()}, Upcoming: ${isUpcoming}`
-      );
-      return isUpcoming;
-    });
+      // Double-check filtering if index was used (Firebase queries are inclusive)
+      if (eventStartDate < new Date()) {
+        return null;
+      }
+      return {
+        id,
+        ...event,
+        bookingCount: event.bookings ? Object.keys(event.bookings).length : 0,
+      };
+    }).filter(Boolean); // Remove null entries from double-check
 
-    console.log(`📊 Total events after filtering: ${eventsArray.length}`);
+    console.log(`🕐 Date filtering - Now: ${now}`);
+    console.log(`📊 Total upcoming events: ${eventsArray.length}`);
 
     // Apply search filter
     if (search) {
@@ -381,8 +389,10 @@ const updateEvent = async (req, res, next) => {
       updates.locationAddress = null;
     }
 
-    await eventRef.set({ ...event, ...updates });
-    res.status(200).json({ id, ...event, ...updates });
+    // Use update() instead of set() to preserve existing data
+    await eventRef.update(updates);
+    const updatedEvent = { ...event, ...updates };
+    res.status(200).json({ id, ...updatedEvent });
   } catch (error) {
     console.error("Error updating event:", error.message, error.stack);
     next(error);
@@ -440,6 +450,21 @@ const bookEvent = async (req, res, next) => {
 
     if (!event) {
       return res.status(404).json({ error: "Event not found" });
+    }
+
+    // Check if event is in the past
+    const eventStartDate = new Date(event.startDate);
+    const now = new Date();
+    if (eventStartDate < now) {
+      return res.status(400).json({ error: "Cannot book past events" });
+    }
+
+    // Check if event has reached max capacity
+    const currentBookings = event.bookings ? Object.keys(event.bookings).length : 0;
+    if (event.maxAttendees && currentBookings >= event.maxAttendees) {
+      return res
+        .status(400)
+        .json({ error: "This event has reached its maximum capacity" });
     }
 
     const bookingRef = database.ref(`events/${id}/bookings/${userId}`);

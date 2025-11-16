@@ -141,7 +141,39 @@ class SearchService {
     try {
       const usersSnapshot = await database.ref('users').once('value');
       const users = usersSnapshot.val() || {};
-      const usersArray = Object.entries(users).map(([id, data]) => ({ uid: id, ...data }));
+      const usersArray = Object.entries(users).map(([id, data]) => {
+        // Normalize user data - ensure we have displayName from name field if missing
+        const normalized = { uid: id, ...data };
+        
+        // Try to get displayName from various sources
+        if (!normalized.displayName) {
+          normalized.displayName = normalized.name || 
+                                   normalized.fullName || 
+                                   normalized.username ||
+                                   (normalized.email ? normalized.email.split('@')[0] : null) ||
+                                   null;
+        }
+        
+        // Also ensure username exists
+        if (!normalized.username && normalized.displayName) {
+          normalized.username = normalized.displayName.toLowerCase().replace(/\s+/g, '_');
+        }
+        
+        // Extract first and last name from displayName if available
+        if (normalized.displayName && !normalized.firstName && !normalized.lastName) {
+          const nameParts = normalized.displayName.trim().split(/\s+/);
+          if (nameParts.length >= 2) {
+            normalized.firstName = nameParts[0];
+            normalized.lastName = nameParts.slice(1).join(' ');
+          } else if (nameParts.length === 1) {
+            normalized.firstName = nameParts[0];
+          }
+        }
+        
+        return normalized;
+      });
+
+      console.log(`🔍 [Search] Searching for "${query}" in ${usersArray.length} users`);
 
       // Filter users
       let filteredUsers = usersArray.filter(user => {
@@ -155,14 +187,72 @@ class SearchService {
         return true;
       });
 
-      // Search in username, displayName, email
+      // Search in username, displayName, name, email
       const searchTerms = this.tokenizeQuery(query);
+      console.log(`🔍 [Search] Tokenized terms:`, searchTerms);
+      
       const scoredUsers = filteredUsers.map(user => {
         const score = this.calculateUserRelevanceScore(user, searchTerms);
+        
+        // Debug logging for users with potential matches
+        if (score > 0 || query.toLowerCase().includes('henry') || query.toLowerCase().includes('david')) {
+          const displayName = (user.displayName || user.name || '').toLowerCase();
+          const username = (user.username || '').toLowerCase();
+          if (displayName.includes('henry') || displayName.includes('david') || 
+              username.includes('henry') || username.includes('david')) {
+            console.log(`🔍 [Search] User match candidate:`, {
+              uid: user.uid,
+              displayName: user.displayName || user.name,
+              username: user.username,
+              email: user.email,
+              score,
+              searchTerms
+            });
+          }
+        }
+        
         return { ...user, relevanceScore: score };
       });
 
-      return scoredUsers.filter(user => user.relevanceScore > 0);
+      // Sort by relevance score (highest first)
+      scoredUsers.sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+      const results = scoredUsers.filter(user => user.relevanceScore > 0);
+      console.log(`🔍 [Search] Found ${results.length} matching users for "${query}"`);
+      
+      // If no results found, log all users with names containing search terms for debugging
+      if (results.length === 0 && (query.toLowerCase().includes('henry') || query.toLowerCase().includes('david'))) {
+        console.log(`🔍 [Search] No results found. Checking all users for debugging...`);
+        const queryLower = query.toLowerCase();
+        const potentialMatches = filteredUsers.filter(user => {
+          const displayName = ((user.displayName || user.name || '') + '').toLowerCase();
+          const username = ((user.username || '') + '').toLowerCase();
+          const email = ((user.email || '') + '').toLowerCase();
+          return displayName.includes(queryLower) || username.includes(queryLower) || email.includes(queryLower);
+        }).slice(0, 5);
+        
+        if (potentialMatches.length > 0) {
+          console.log(`🔍 [Search] Found ${potentialMatches.length} potential matches (but scored 0):`, 
+            potentialMatches.map(u => ({
+              uid: u.uid,
+              displayName: u.displayName || u.name,
+              username: u.username,
+              email: u.email,
+              allFields: {
+                displayName: u.displayName,
+                name: u.name,
+                fullName: u.fullName,
+                username: u.username,
+                email: u.email
+              }
+            }))
+          );
+        } else {
+          console.log(`🔍 [Search] No users found with "${query}" in any field`);
+        }
+      }
+      
+      return results;
     } catch (error) {
       console.error('Search users error:', error);
       return [];
@@ -241,10 +331,15 @@ class SearchService {
 
   // Tokenize search query
   tokenizeQuery(query) {
-    return query.toLowerCase()
+    // Don't filter out stop words for user search - we want to match names like "david", "john", etc.
+    const terms = query.toLowerCase()
       .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
-      .filter(term => term.length > 0 && !this.stopWords.has(term));
+      .filter(term => term.length > 0);
+    
+    // Return terms - don't filter by stopWords for user searches
+    // Stop words are common words like "the", "a", "an" - but for names, we want to match everything
+    return terms;
   }
 
   // Calculate relevance score for posts/comments
@@ -288,24 +383,57 @@ class SearchService {
   // Calculate relevance score for users
   calculateUserRelevanceScore(user, searchTerms) {
     let score = 0;
+    
+    // Get all possible name fields (check multiple variations)
     const username = (user.username || '').toLowerCase();
-    const displayName = (user.displayName || '').toLowerCase();
+    const displayName = (user.displayName || user.name || user.fullName || '').toLowerCase();
     const email = (user.email || '').toLowerCase();
+    
+    // Combine all searchable text fields
+    const allSearchableText = [
+      username,
+      displayName,
+      email,
+      (user.firstName || '').toLowerCase(),
+      (user.lastName || '').toLowerCase(),
+    ].filter(Boolean).join(' ').toLowerCase();
 
     searchTerms.forEach(term => {
       // Username matches (highest weight)
-      if (username.includes(term)) {
+      if (username && username.includes(term)) {
         score += 3;
       }
 
-      // Display name matches (medium weight)
-      if (displayName.includes(term)) {
+      // Display name matches (medium weight) - check both displayName and name fields
+      if (displayName && displayName.includes(term)) {
+        score += 2;
+      }
+      
+      // Check individual name fields
+      if (user.firstName && user.firstName.toLowerCase().includes(term)) {
+        score += 2;
+      }
+      if (user.lastName && user.lastName.toLowerCase().includes(term)) {
         score += 2;
       }
 
       // Email matches (low weight)
-      if (email.includes(term)) {
+      if (email && email.includes(term)) {
         score += 1;
+      }
+      
+      // Extra bonus for exact first/last name matches in displayName
+      // Split displayName into words and check for exact term matches
+      if (displayName) {
+        const nameWords = displayName.split(/\s+/).filter(w => w.length > 0);
+        if (nameWords.includes(term)) {
+          score += 1; // Extra bonus for exact word match
+        }
+      }
+      
+      // Also check if term appears anywhere in combined searchable text
+      if (allSearchableText.includes(term)) {
+        score += 0.5; // Small bonus for any match
       }
     });
 
