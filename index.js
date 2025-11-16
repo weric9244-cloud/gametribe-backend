@@ -99,7 +99,14 @@ console.log(
 );
 
 // CORS origin validation function
+// TEMPORARILY ALLOWING ALL ORIGINS FOR DEBUGGING
 const validateOrigin = (origin) => {
+  // Allow all origins for now
+  console.log("✅ CORS: Allowing origin (all origins enabled):", origin);
+  return true;
+  
+  // Original validation code (commented out for debugging)
+  /*
   if (!origin) {
     return true; // Allow requests with no origin (mobile apps)
   }
@@ -125,6 +132,7 @@ const validateOrigin = (origin) => {
   console.log("❌ CORS: Normalized origin:", normalizedOrigin);
   console.log("❌ CORS: Allowed origins:", allowedOrigins);
   return false;
+  */
 };
 
 // Explicit OPTIONS handler for Vercel serverless (FIRST middleware)
@@ -196,14 +204,10 @@ app.use((req, res, next) => {
 });
 
 // Also use cors middleware for additional compatibility
+// TEMPORARILY ALLOWING ALL ORIGINS
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (validateOrigin(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error("Not allowed by CORS"));
-    },
+    origin: true, // Allow all origins
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
