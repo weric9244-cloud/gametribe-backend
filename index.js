@@ -105,7 +105,8 @@ if (process.env.NGROK_URL) {
 }
 
 // Normalize origins (trim and lowercase for comparison)
-const normalizeOrigin = (origin) => origin.trim().toLowerCase().replace(/\/$/, "");
+const normalizeOrigin = (origin) =>
+  origin.trim().toLowerCase().replace(/\/$/, "");
 
 const allowedOriginsRaw = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").concat(defaultOrigins)
@@ -114,8 +115,12 @@ const allowedOriginsRaw = process.env.ALLOWED_ORIGINS
 // Normalize all origins for matching
 const allowedOrigins = allowedOriginsRaw.map(normalizeOrigin);
 
-console.log("🌐 CORS Allowed Origins:", allowedOriginsRaw);
+console.log("🌐 CORS Allowed Origins (raw):", allowedOriginsRaw);
 console.log("🌐 CORS Normalized Origins:", allowedOrigins);
+console.log(
+  "🌐 Checking for hub.gametribe.com (normalized):",
+  allowedOrigins.includes(normalizeOrigin("https://hub.gametribe.com"))
+);
 
 // SECURITY FIX: Mobile app authentication middleware
 const validateMobileApp = (req, res, next) => {
@@ -142,30 +147,6 @@ const validateMobileApp = (req, res, next) => {
 
   next();
 };
-
-// Handle preflight OPTIONS requests explicitly
-app.options("*", (req, res) => {
-  const origin = req.get("origin");
-  
-  if (!origin) {
-    return res.status(200).end();
-  }
-  
-  const normalizedOrigin = normalizeOrigin(origin);
-  
-  if (allowedOrigins.includes(normalizedOrigin) ||
-      ((process.env.NODE_ENV === "development" || !process.env.NODE_ENV) &&
-       (origin.includes("ngrok-free.app") || origin.includes("ngrok.io")))) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-SSO-Token, X-Community-Token, X-Mobile-App-Id, ngrok-skip-browser-warning");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Max-Age", "86400"); // 24 hours
-    return res.status(200).end();
-  }
-  
-  return res.status(403).json({ error: "Not allowed by CORS" });
-});
 
 app.use(
   cors({
@@ -209,7 +190,8 @@ app.use(
     ],
     exposedHeaders: ["X-SSO-Token", "X-Community-Token"],
     preflightContinue: false,
-    optionsSuccessStatus: 200,
+    optionsSuccessStatus: 204, // Use 204 for OPTIONS (standard)
+    maxAge: 86400, // Cache preflight for 24 hours
   })
 );
 
