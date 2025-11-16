@@ -5,7 +5,18 @@ const {
   migrateChallengeIndexes,
   checkMigrationStatus,
 } = require("../utils/migrateChallengeIndex");
-const { normalizeAllUsers } = require("../scripts/normalizeUsersForSearch");
+// Lazy load normalizeAllUsers to avoid crashing if script doesn't exist in deployment
+let normalizeAllUsers = null;
+try {
+  const normalizeModule = require("../scripts/normalizeUsersForSearch");
+  normalizeAllUsers = normalizeModule.normalizeAllUsers;
+} catch (error) {
+  console.warn("⚠️ normalizeUsersForSearch script not available:", error.message);
+  // Create a stub function that returns an error
+  normalizeAllUsers = async () => {
+    throw new Error("User normalization script not available in this deployment");
+  };
+}
 
 /**
  * Migration Routes
