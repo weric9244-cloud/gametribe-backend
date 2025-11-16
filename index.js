@@ -104,7 +104,7 @@ const validateOrigin = (origin) => {
   // Allow all origins for now
   console.log("✅ CORS: Allowing origin (all origins enabled):", origin);
   return true;
-  
+
   // Original validation code (commented out for debugging)
   /*
   if (!origin) {
