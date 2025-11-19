@@ -259,16 +259,24 @@ const createNotification = async (userId, notificationData) => {
       database,
       `notifications/${userId}/${notificationData.id}`
     );
+    console.log(`[NotificationController] Creating notification for user ${userId}:`, {
+      id: notificationData.id,
+      type: notificationData.type,
+      title: notificationData.title,
+      message: notificationData.message,
+      createdAt: notificationData.createdAt,
+    });
     await set(notificationRef, notificationData);
+    console.log(`[NotificationController] ✅ Notification created successfully at notifications/${userId}/${notificationData.id}`);
     return true;
   } catch (error) {
-    console.error("Error creating notification:", error);
+    console.error("[NotificationController] ❌ Error creating notification:", error);
     return false;
   }
 };
 
 /**
- * Create challenge notification
+ * Create challenge notification (PlayChat format)
  */
 const createChallengeNotification = async (
   challengerId,
@@ -276,19 +284,22 @@ const createChallengeNotification = async (
   challengeData
 ) => {
   try {
+    const challengerName = challengeData.challengerName || "Someone";
+    const betAmount = challengeData.betAmount || 0;
+    const gameTitle = challengeData.gameTitle || "a game";
+    
     const notificationData = {
       id: `challenge_${Date.now()}_${challengerId}`,
-      type: "challenge_request",
+      userId: challengerId, // Who triggered the notification
+      userName: challengerName,
+      userAvatar: challengeData.challengerAvatar || "",
+      recipientId: challengedId, // Who receives it
+      type: "challenge", // PlayChat expects "challenge" type
+      title: "🎯 New Challenge!",
+      message: `${challengerName} challenged you to ${gameTitle} for ${betAmount} KES`,
       challengeId: challengeData.challengeId,
-      fromUserId: challengerId,
-      fromUserName: challengeData.challengerName,
-      fromUserAvatar: challengeData.challengerAvatar,
-      gameTitle: challengeData.gameTitle,
-      gameImage: challengeData.gameImage,
-      betAmount: challengeData.betAmount,
-      timestamp: Date.now(),
-      read: false,
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+      createdAt: Date.now(),
+      isRead: false,
     };
 
     return await createNotification(challengedId, notificationData);
@@ -299,27 +310,92 @@ const createChallengeNotification = async (
 };
 
 /**
- * Create challenge result notification
+ * Create challenge result notification (PlayChat format)
  */
 const createChallengeResultNotification = async (userId, resultData) => {
   try {
+    const result = resultData.result; // 'won', 'lost', 'tie'
+    const gameTitle = resultData.gameTitle || "the game";
+    const opponentName = resultData.opponentName || "Your opponent";
+    const betAmount = resultData.betAmount || 0;
+    const prizeAmount = resultData.prizeAmount || 0;
+
+    let title, message;
+    if (result === "won") {
+      title = "🏆 You Won!";
+      message = `Congratulations! You won the challenge against ${opponentName} in ${gameTitle}. You earned ${prizeAmount} KES!`;
+    } else if (result === "lost") {
+      title = "💪 Challenge Completed";
+      message = `${opponentName} won the challenge in ${gameTitle}. Better luck next time!`;
+    } else {
+      title = "🤝 Challenge Tied!";
+      message = `You tied with ${opponentName} in ${gameTitle}. Well played!`;
+    }
+
     const notificationData = {
       id: `result_${Date.now()}_${resultData.challengeId}`,
-      type: "challenge_result",
+      userId: userId, // The user receiving the notification
+      userName: opponentName,
+      userAvatar: resultData.opponentAvatar || "",
+      recipientId: userId,
+      type: "challenge", // PlayChat expects "challenge" type
+      title: title,
+      message: message,
       challengeId: resultData.challengeId,
-      gameTitle: resultData.gameTitle,
-      result: resultData.result, // 'won', 'lost', 'tie'
-      betAmount: resultData.betAmount,
-      prizeAmount: resultData.prizeAmount,
-      yourScore: resultData.yourScore,
-      opponentScore: resultData.opponentScore,
-      timestamp: Date.now(),
-      read: false,
+      createdAt: Date.now(),
+      isRead: false,
     };
 
     return await createNotification(userId, notificationData);
   } catch (error) {
     console.error("Error creating challenge result notification:", error);
+    return false;
+  }
+};
+
+/**
+ * Create score submission notification (PlayChat format)
+ */
+const createScoreSubmissionNotification = async (
+  submitterId,
+  opponentId,
+  challengeData
+) => {
+  try {
+    // Get submitter's name
+    const submitterRef = ref(database, `users/${submitterId}`);
+    const submitterSnap = await get(submitterRef);
+    let submitterName = "Your opponent";
+    let submitterAvatar = "";
+    
+    if (submitterSnap.exists()) {
+      const submitterData = submitterSnap.val();
+      submitterName = submitterData.displayName || submitterData.username || submitterData.name || "Your opponent";
+      submitterAvatar = submitterData.photoURL || submitterData.avatar || "";
+    }
+
+    const gameTitle = challengeData.gameTitle || "the game";
+    const score = challengeData.challengerId === submitterId 
+      ? challengeData.challengerScore 
+      : challengeData.challengedScore;
+
+    const notificationData = {
+      id: `score_${Date.now()}_${submitterId}_${challengeData.challengeId}`,
+      userId: submitterId,
+      userName: submitterName,
+      userAvatar: submitterAvatar,
+      recipientId: opponentId,
+      type: "challenge", // PlayChat expects "challenge" type
+      title: "📊 Score Submitted",
+      message: `${submitterName} submitted their score for ${gameTitle}`,
+      challengeId: challengeData.challengeId || challengeData.id,
+      createdAt: Date.now(),
+      isRead: false,
+    };
+
+    return await createNotification(opponentId, notificationData);
+  } catch (error) {
+    console.error("Error creating score submission notification:", error);
     return false;
   }
 };
@@ -331,12 +407,15 @@ const createSystemNotification = async (userId, systemData) => {
   try {
     const notificationData = {
       id: `system_${Date.now()}_${userId}`,
+      userId: userId,
+      userName: "System",
+      userAvatar: "",
+      recipientId: userId,
       type: "system",
       title: systemData.title,
       message: systemData.message,
-      action: systemData.action,
-      timestamp: Date.now(),
-      read: false,
+      createdAt: Date.now(),
+      isRead: false,
     };
 
     return await createNotification(userId, notificationData);
@@ -356,6 +435,7 @@ module.exports = {
   createNotification,
   createChallengeNotification,
   createChallengeResultNotification,
+  createScoreSubmissionNotification,
   createSystemNotification,
 };
 

@@ -515,6 +515,47 @@ const acceptChallenge = async (req, res) => {
       log.warn("accept:index_update:error", { error: err.message, challengeId });
     });
 
+    // Create database notification for challenger (non-blocking)
+    try {
+      const { createNotification } = require("./notificationController");
+      const challengedName = challengedUser.displayName || challengedUser.username || "Someone";
+      const challengedAvatar = challengedUser.photoURL || challengedUser.avatar || "";
+      
+      const notificationData = {
+        id: `challenge_accepted_${Date.now()}_${challengeId}`,
+        userId: challengedId, // Who triggered the notification
+        userName: challengedName,
+        userAvatar: challengedAvatar,
+        recipientId: challengeData.challengerId, // Who receives it
+        type: "challenge", // PlayChat expects "challenge" type
+        title: "✅ Challenge Accepted!",
+        message: `${challengedName} accepted your challenge to ${challengeData.gameTitle || "a game"}`,
+        challengeId: challengeId,
+        createdAt: Date.now(),
+        isRead: false,
+      };
+      
+      createNotification(challengeData.challengerId, notificationData).catch((err) => {
+        log.warn("accept:notification:error", { error: err.message, challengeId });
+      });
+    } catch (notifyErr) {
+      log.warn("accept:notification:setup_error", { error: notifyErr.message });
+    }
+
+    // Send FCM notification (also send FCM for when app is in background)
+    try {
+      const { sendChallengeAcceptedNotification } = require("../services/fcmService");
+      sendChallengeAcceptedNotification(
+        challengeData.challengerId,
+        challengedId,
+        challengeData
+      ).catch((err) => {
+        log.warn("accept:fcm:error", { error: err.message, challengeId });
+      });
+    } catch (fcmErr) {
+      log.warn("accept:fcm:setup_error", { error: fcmErr.message });
+    }
+
     log.info("accept:success", {
       rid,
       challengeId,
@@ -605,6 +646,52 @@ const rejectChallenge = async (req, res) => {
       );
     } catch (e) {
       log.warn("realtime_emit:reject:warn", { error: e.message });
+    }
+
+    // Create database notification for challenger (non-blocking)
+    try {
+      const { createNotification } = require("./notificationController");
+      // Get challenged user info
+      const challengedUserRef = ref(database, `users/${challengedId}`);
+      const challengedUserSnap = await get(challengedUserRef);
+      const challengedUser = challengedUserSnap.val() || {};
+      
+      const challengedName = challengedUser.displayName || challengedUser.username || "Someone";
+      const challengedAvatar = challengedUser.photoURL || challengedUser.avatar || "";
+      
+      const notificationData = {
+        id: `challenge_rejected_${Date.now()}_${challengeId}`,
+        userId: challengedId, // Who triggered the notification
+        userName: challengedName,
+        userAvatar: challengedAvatar,
+        recipientId: challengeData.challengerId, // Who receives it
+        type: "challenge", // PlayChat expects "challenge" type
+        title: "❌ Challenge Rejected",
+        message: `${challengedName} rejected your challenge to ${challengeData.gameTitle || "a game"}`,
+        challengeId: challengeId,
+        createdAt: Date.now(),
+        isRead: false,
+      };
+      
+      createNotification(challengeData.challengerId, notificationData).catch((err) => {
+        log.warn("reject:notification:error", { error: err.message, challengeId });
+      });
+    } catch (notifyErr) {
+      log.warn("reject:notification:setup_error", { error: notifyErr.message });
+    }
+
+    // Send FCM notification (also send FCM for when app is in background)
+    try {
+      const { sendChallengeRejectedNotification } = require("../services/fcmService");
+      sendChallengeRejectedNotification(
+        challengeData.challengerId,
+        challengedId,
+        challengeData
+      ).catch((err) => {
+        log.warn("reject:fcm:error", { error: err.message, challengeId });
+      });
+    } catch (fcmErr) {
+      log.warn("reject:fcm:setup_error", { error: fcmErr.message });
     }
 
     res.json({
@@ -1064,6 +1151,24 @@ const submitChallengeScore = async (req, res) => {
         }).catch((err) =>
           log.error("FCM score notification failed", { error: err.message })
         );
+
+        // Also create database notification for PlayChat
+        try {
+          const { createScoreSubmissionNotification } = require("./notificationController");
+          createScoreSubmissionNotification(userId, opponentId, {
+            ...challengeData,
+            challengerScore:
+              updates.challengerScore ?? challengeData.challengerScore,
+            challengedScore:
+              updates.challengedScore ?? challengeData.challengedScore,
+            challengeId: challengeId,
+            gameTitle: challengeData.gameTitle,
+          }).catch((err) => {
+            log.warn("score:notification:error", { error: err.message, challengeId });
+          });
+        } catch (notifyErr) {
+          log.warn("score:notification:setup_error", { error: notifyErr.message });
+        }
       }
 
       // If challenge completed, emit completion + FCM to both players
