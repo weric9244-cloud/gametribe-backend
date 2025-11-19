@@ -53,8 +53,12 @@ const adminRouter = require("./routes/admin");
 const migrationRouter = require("./routes/migration");
 
 const app = express();
-// Trust Vercel/Proxy to ensure req.ip is derived correctly for rate limiting
-app.set("trust proxy", true);
+// Trust only the first proxy hop (Vercel/NGINX) so rate limiting can't be bypassed
+const TRUSTED_PROXY_HOPS = parseInt(
+  process.env.TRUST_PROXY_HOPS || "1",
+  10
+);
+app.set("trust proxy", TRUSTED_PROXY_HOPS);
 
 // ============================================
 // CORS CONFIGURATION - MUST BE FIRST
