@@ -201,20 +201,9 @@ router.post("/wallet/update", walletUpdateAuth, async (req, res) => {
     const currentBalance = foundUser.wallet?.amount || 0;
     const currentEscrow = foundUser.wallet?.escrowBalance || 0;
     
-    // Prepare wallet update
-    const walletUpdate = {
-      amount: newBalance,
-      escrowBalance: currentEscrow, // Preserve escrow balance
-      updatedAt: new Date().toISOString(),
-      currency: foundUser.wallet?.currency || "KES",
-    };
-    
-    // Preserve createdAt if it exists
-    if (foundUser.wallet?.createdAt) {
-      walletUpdate.createdAt = foundUser.wallet.createdAt;
-    } else {
-      walletUpdate.createdAt = new Date().toISOString();
-    }
+    // Preserve existing wallet data
+    const existingWallet = foundUser.wallet || {};
+    const existingTransactions = existingWallet.transactions || {};
     
     // Create a transaction record for audit
     const transaction = {
@@ -232,12 +221,25 @@ router.post("/wallet/update", walletUpdateAuth, async (req, res) => {
       createdAt: new Date().toISOString(),
     };
     
-    // Update wallet and add transaction
-    const userRef = ref(database, `users/${foundUserId}`);
-    await update(userRef, {
-      wallet: walletUpdate,
-      [`wallet/transactions/${transaction.id}`]: transaction,
-    });
+    // Update wallet and add transaction in one operation (avoiding path conflict)
+    const walletRef = ref(database, `users/${foundUserId}/wallet`);
+    
+    // Prepare wallet update with all fields including transactions
+    const walletUpdate = {
+      ...existingWallet, // Preserve all existing wallet data
+      amount: newBalance,
+      escrowBalance: currentEscrow, // Preserve escrow balance
+      updatedAt: new Date().toISOString(),
+      currency: existingWallet.currency || "KES",
+      transactions: {
+        ...existingTransactions, // Preserve existing transactions
+        [transaction.id]: transaction, // Add new transaction
+      },
+    };
+    
+    // Update the entire wallet object (including transactions) in one operation
+    const { set } = require("firebase/database");
+    await set(walletRef, walletUpdate);
     
     console.log(`[Admin] ✅ Wallet updated successfully for user ${foundUserId}`);
     console.log(`[Admin] Previous balance: ${currentBalance} KES`);
