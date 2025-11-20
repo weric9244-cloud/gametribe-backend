@@ -392,6 +392,50 @@ app.use(
   require("./routes/auth")
 );
 
+const DEFAULT_ANDROID_SHA256 = ["08:20:EA:38:FF:47:A2:73:8A:EA:DB:57:4A:88:7C:DE:A1:89:5B:EB:DC:AB:B4:44:DF:96:43:38:CD:75:C3:53"];
+const androidShaFingerprints = process.env.ANDROID_APP_SHA256
+  ? process.env.ANDROID_APP_SHA256.split(",")
+      .map((fp) => fp.trim())
+      .filter((fp) => fp.length > 0)
+  : DEFAULT_ANDROID_SHA256;
+const appleAssociatedAppId =
+  process.env.APPLE_APP_ID || "TEAM_ID.com.clancast.app";
+const appleAssociatedPaths = ["/profile*", "/user*", "/user/*"];
+
+// ============================================
+// APP LINKS VERIFICATION FILES
+// ============================================
+// Android App Links verification
+app.get("/.well-known/assetlinks.json", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.json([
+    {
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: {
+        namespace: "android_app",
+        package_name: "com.clancast.app",
+        sha256_cert_fingerprints: androidShaFingerprints,
+      },
+    },
+  ]);
+});
+
+// iOS Universal Links verification
+app.get("/.well-known/apple-app-site-association", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.json({
+    applinks: {
+      apps: [],
+      details: [
+        {
+          appID: appleAssociatedAppId,
+          paths: appleAssociatedPaths,
+        },
+      ],
+    },
+  });
+});
+
 // Open Graph unfurl endpoint using proper scraper with new middleware
 app.get(
   `${routePrefix}/og`,
